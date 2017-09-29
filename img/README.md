@@ -1,4 +1,5 @@
-CoverDroid镜像使用分卷打包的方式进行打包，在本文件夹下使用如下命令解压：
+# CoverDroid-IMG 说明
+本文件夹下提供的CoverDroid镜像使用分卷的方式进行打包，在本文件夹下使用如下命令解压：
 
         cat CoverDroid-IMG.tar* | tar xzvf -
 
