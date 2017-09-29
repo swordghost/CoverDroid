@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns="http://java.sun.com/xml/ns/javaee" xmlns:web="http://java.sun.com/xml/ns/javaee/web-app_2_5.xsd"
+	xsi:schemaLocation="http://java.sun.com/xml/ns/javaee http://java.sun.com/xml/ns/javaee/web-app_2_5.xsd"
+	id="WebApp_ID" version="2.5">
+	<display-name>CoverDroid</display-name>
+	<welcome-file-list>
+		<welcome-file>/index.html</welcome-file>
+	</welcome-file-list>
+	<servlet>
+		<servlet-name>nativequery</servlet-name>
+		<servlet-class>cn.edu.pku.apiminier.web.CoverServlet</servlet-class>
+	</servlet>
+	<servlet-mapping>
+		<servlet-name>nativequery</servlet-name>
+		<url-pattern>/nativequery</url-pattern>
+	</servlet-mapping>
+	<servlet>
+		<servlet-name>uploadfile</servlet-name>
+		<servlet-class>cn.edu.pku.apiminier.web.weixin.UploadServlet</servlet-class>
+	</servlet>
+	<servlet-mapping>
+		<servlet-name>uploadfile</servlet-name>
+		<url-pattern>/uploadfile</url-pattern>
+
+	</servlet-mapping>
+	<servlet>
+		<servlet-name>remotecontrol</servlet-name>
+		<servlet-class>cn.edu.pku.apiminier.web.RemoteControlServlet</servlet-class>
+	</servlet>
+	<servlet-mapping>
+		<servlet-name>remotecontrol</servlet-name>
+		<url-pattern>/remotecontrol</url-pattern>
+	</servlet-mapping>
+	<servlet>
+		<servlet-name>urlget</servlet-name>
+		<servlet-class>cn.edu.pku.apiminier.web.ProxyServlet</servlet-class>
+	</servlet>
+	<servlet-mapping>
+		<servlet-name>urlget</servlet-name>
+		<url-pattern>/iasIDE/urlget</url-pattern>
+	</servlet-mapping>
+
+</web-app>

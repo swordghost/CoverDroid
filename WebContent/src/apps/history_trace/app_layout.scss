@@ -1,0 +1,46 @@
+div.static {
+  padding-bottom: 10px;
+  padding-top: 10px;
+}
+
+@mixin overflow-control {
+  overflow-x: hidden;
+  overflow-y: auto;
+  -ms-word-wrap: break-word;
+  word-wrap: break-word;
+}
+
+#result {
+  margin-top: 10px;
+
+  a.panel.panel-primary {
+    margin-bottom: 0;
+  }
+
+  .covered {
+    color: red;
+  }
+
+  li.active > a.covered {
+    color: pink;
+  }
+
+  .method-class {
+    height: 470px;
+    @include overflow-control;
+  }
+
+  .method-info {
+    margin-top: 2px;
+    @include overflow-control;
+
+    div.panel-body {
+      max-height: 426px;
+      overflow-y: scroll;
+    }
+
+    table {
+      font-size: 12px;
+    }
+  }
+}
