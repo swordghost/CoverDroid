@@ -1,16 +1,15 @@
 package cn.edu.pku.apiminier.web.trace;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.OutputStream;
-import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -37,8 +36,8 @@ import com.googlecode.d2j.visitors.DexDebugVisitor;
 public class DexZipReader {
 	public static String TraceDir = "./trace";
 	public static TraceCache<DexZipReader> global = getTraceCache();
-	Map<String, DexClassNode> dexCache;
-	Map<String, String> clzName2File;
+	Map<Map<String, Integer>, DexFileReader> dexCache;
+
 	static {
 		File dir = new File(TraceDir);
 		if (!dir.exists()) {
@@ -101,7 +100,8 @@ public class DexZipReader {
 		Collections.sort(ret, new Comparator<File>() {
 			@Override
 			public int compare(File o1, File o2) {
-				return (int) ((o2.lastModified() - o1.lastModified()) > 0 ? 1 : -1);
+				return (int) ((o2.lastModified() - o1.lastModified()) > 0 ? 1
+						: -1);
 			}
 		});
 		List<String> strs = new ArrayList<String>();
@@ -111,19 +111,16 @@ public class DexZipReader {
 	}
 
 	public DexZipReader(String path) {
-		dexCache = new HashMap<String, DexClassNode>();
-		clzName2File = new HashMap<String, String>();
+		dexCache = new HashMap<Map<String, Integer>, DexFileReader>();
 		try {
 			ZipInputStream zin = new ZipInputStream(new FileInputStream(path));
 			for (ZipEntry ze; (ze = zin.getNextEntry()) != null;) {
 				if (!ze.getName().endsWith(".dex"))
 					continue;
 				DexFileReader dfr = new DexFileReader(zin);
-				DexFileNode dfn = new DexFileNode();
-				dfr.accept(dfn);
-				for (DexClassNode dcn : dfn.clzs) {
-					dexCache.put(dcn.className, dcn);
-					clzName2File.put(dcn.className, ze.getName());
+				Map<String, Integer> names2ID = dfr.getClassNamesToID();
+				for (String clzName : names2ID.keySet()) {
+					dexCache.put(names2ID, dfr);
 				}
 			}
 			zin.close();
@@ -140,8 +137,21 @@ public class DexZipReader {
 		if (!clz.endsWith(";")) {
 			clz = clz + ";";
 		}
-		DexClassNode dcn = dexCache.get(clz);
-		if (dcn != null) {
+		DexFileReader dfr = null;
+		Integer clzID = -1;
+		for (Map<String, Integer> name2ID : dexCache.keySet()) {
+			if (name2ID.containsKey(clz)) {
+				dfr = dexCache.get(name2ID);
+				clzID = name2ID.get(clz);
+				break;
+			}
+		}
+		if (dfr != null) {
+			DexFileNode fNode = new DexFileNode();
+			dfr.accept(fNode, clzID, 0);
+			DexClassNode dcn = fNode.clzs.get(0);
+			System.out.println("[DexZipReader] found clz:" + dcn.className
+					+ " id:" + clzID);
 			return new Gson().toJson(parseClassNode(dcn, codeMapFile));
 		} else {
 			return new Gson().toJson(getCoverageSummary(codeMapFile));
@@ -155,33 +165,43 @@ public class DexZipReader {
 	}
 
 	// TODO
-	private PlainClass getPackageCoverage(String pkgName, CodeMapFile codeMapFile) {
+	private PlainClass getPackageCoverage(String pkgName,
+			CodeMapFile codeMapFile) {
 		pkgName = pkgName.replace(";", "");
-		PlainClass pc = new PlainClass(pkgName.substring(1).replaceAll("/", "."));
-		for (String key : dexCache.keySet()) {
-			if (key.startsWith(pkgName) && codeMapFile.coverClz(key)) {
-				key = "Covered " + key;
-				PlainMethod pm = new PlainMethod(key);
-				pc.addMethod(pm);
+		PlainClass pc = new PlainClass(pkgName.substring(1)
+				.replaceAll("/", "."));
+		Set<String> visitedClz = new HashSet<String>();
+		for (Map<String, Integer> name2ID : dexCache.keySet()) {
+			for (String key : name2ID.keySet()) {
+				if (key.startsWith(pkgName) && codeMapFile.coverClz(key)
+						&& !visitedClz.contains(key)) {
+					visitedClz.add(key);
+					key = "Covered " + key;
+					PlainMethod pm = new PlainMethod(key);
+					pc.addMethod(pm);
+				}
 			}
 		}
 		return pc;
 	}
 
 	private PlainClass parseClassNode(DexClassNode dcn, CodeMapFile codeMapFile) {
-		PlainClass pc = new PlainClass(dcn.className.substring(1, dcn.className.length() - 1).replace("/", "."));
+
+		PlainClass pc = new PlainClass(dcn.className.substring(1,
+				dcn.className.length() - 1).replace("/", "."));
 		// + "@" + clzName2File.get(dcn.className)
 		codeMapFile.printClz(dcn, pc);
-
 		if (dcn.methods != null) {
 			for (DexMethodNode dmn : dcn.methods) {
 				CodeMethod cover = codeMapFile.codes.get(dmn.method);
 				String pre = cover == null ? "" : "Covered ";
 				// PlainMethod pm = new PlainMethod(pre +
 				// getMethodAccess(dmn.access) + dmn.method.toString());
-				PlainMethod pm = new PlainMethod(pre + getMethodAccess(dmn.access) + dmn.method.getName());
+				PlainMethod pm = new PlainMethod(pre
+						+ getMethodAccess(dmn.access) + dmn.method.getName());
 
-				System.out.println("[DexZipReader] parse method:" + dmn.method.toString() + " codeisNULL:"
+				System.out.println("[DexZipReader] parse method:"
+						+ dmn.method.toString() + " codeisNULL:"
 						+ codeMapFile.codes.containsKey(dmn.method));
 				DexCodePrinter dcp = new DexCodePrinter(true, pm.code, cover);
 				if (dmn.codeNode != null) {
@@ -193,7 +213,8 @@ public class DexZipReader {
 		return pc;
 	}
 
-	private void acceptCodeNode(DexCodeNode codeNode, DexCodePrinter dcp, CodeMethod cover) {
+	private void acceptCodeNode(DexCodeNode codeNode, DexCodePrinter dcp,
+			CodeMethod cover) {
 		if (codeNode.debugNode != null) {
 			DexDebugVisitor ddv = dcp.visitDebug();
 			if (ddv != null) {
@@ -214,22 +235,28 @@ public class DexZipReader {
 				if (j + 1 < codeNode.stmts.size()) {
 					next = codeNode.stmts.get(j + 1);
 				}
-				if (next != null && next instanceof JumpStmtNode && next.op.name().contains("IF")) {
-					System.out.println("[Debug]DexZipReader owner:" + cover.getMethod().getOwner());
-					Line line = dcp.bean.content.get(dcp.bean.content.size() - 1);
-					line.coverInfo = (Integer.valueOf(line.coverInfo) + cover.getCover(dcp.offset + 1)) + "";
+				if (next != null && next instanceof JumpStmtNode
+						&& next.op.name().contains("IF")) {
+					System.out.println("[Debug]DexZipReader owner:"
+							+ cover.getMethod().getOwner());
+					Line line = dcp.bean.content
+							.get(dcp.bean.content.size() - 1);
+					line.coverInfo = (Integer.valueOf(line.coverInfo) + cover
+							.getCover(dcp.offset + 1)) + "";
 				}
 			}
 			if (n instanceof PackedSwitchStmtNode) {
 				PackedSwitchStmtNode switchStmt = (PackedSwitchStmtNode) n;
-				List<Integer> covers = cover.getCover(switchStmt.offset, switchStmt.labels.length + 1);
+				List<Integer> covers = cover.getCover(switchStmt.offset,
+						switchStmt.labels.length + 1);
 				Line line = dcp.bean.content.get(dcp.bean.content.size() - 1);
 				for (Integer i : covers)
 					line.coverInfo += " " + i;
 			}
 			if (n instanceof SparseSwitchStmtNode) {
 				SparseSwitchStmtNode switchStmt = (SparseSwitchStmtNode) n;
-				List<Integer> covers = cover.getCover(switchStmt.offset, switchStmt.labels.length + 1);
+				List<Integer> covers = cover.getCover(switchStmt.offset,
+						switchStmt.labels.length + 1);
 				Line line = dcp.bean.content.get(dcp.bean.content.size() - 1);
 				for (Integer i : covers)
 					line.coverInfo += " " + i;
@@ -280,7 +307,8 @@ public class DexZipReader {
 			@Override
 			public DexZipReader getInstance(String key) {
 				File f = new File(TraceDir, key);
-				System.out.println("file:" + f.getAbsolutePath() + " is Exist?" + f.exists());
+				System.out.println("file:" + f.getAbsolutePath() + " is Exist?"
+						+ f.exists());
 				if (!f.exists())
 					return null;
 				try {

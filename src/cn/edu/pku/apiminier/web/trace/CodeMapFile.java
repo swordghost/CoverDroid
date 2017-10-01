@@ -19,7 +19,6 @@ import cn.edu.pku.apiminier.web.trace.bean.PackageCoverageBean;
 import cn.edu.pku.apiminier.web.trace.bean.SummaryCoverageBean;
 
 import com.google.iasgson.Gson;
-import com.googlecode.d2j.DexConstants;
 import com.googlecode.d2j.DexLabel;
 import com.googlecode.d2j.Method;
 import com.googlecode.d2j.node.DexClassNode;
@@ -31,6 +30,7 @@ import com.googlecode.d2j.node.insn.DexStmtNode;
 import com.googlecode.d2j.node.insn.JumpStmtNode;
 import com.googlecode.d2j.node.insn.PackedSwitchStmtNode;
 import com.googlecode.d2j.node.insn.SparseSwitchStmtNode;
+import com.googlecode.d2j.reader.DexFileReader;
 
 public class CodeMapFile {
 	public Map<Method, CodeMethod> codes;
@@ -93,11 +93,6 @@ public class CodeMapFile {
 			return method;
 		}
 
-		// public void setMap(String str) {
-		// init();
-		// map = str;
-		// }
-
 		public int getCover(int offset) {
 			if (offset >= coverage.size()) {
 				System.err.println("method:" + method.toString() + " map:" + coverage.size() + " offset:" + offset);
@@ -135,7 +130,7 @@ public class CodeMapFile {
 			Map<DexLabel, Integer> label2Integer = getLabel2Integer(dmn.codeNode.debugNode);
 			Set<Integer> lines = new HashSet<Integer>();
 			int offset = 0;
-			ret.branch = ret.branchCover = 1;
+			ret.branch = ret.branchCover = 0;
 			for (int i = 0; i < dmn.codeNode.stmts.size(); i++) {
 				DexStmtNode stmt = dmn.codeNode.stmts.get(i);
 				int c = getCover(offset);
@@ -164,11 +159,26 @@ public class CodeMapFile {
 								ret.branchCover++;
 						}
 					}
+				} else if (stmt != null && c == 0) {
+					if (stmt instanceof PackedSwitchStmtNode) {
+						PackedSwitchStmtNode pssn = (PackedSwitchStmtNode) stmt;
+						ret.branch += pssn.labels.length;
+					} else if (stmt instanceof SparseSwitchStmtNode) {
+						SparseSwitchStmtNode sssn = (SparseSwitchStmtNode) stmt;
+						ret.branch += sssn.cases.length + 1;
+					} else if (stmt instanceof JumpStmtNode) {
+						if (stmt.op.name().contains("IF")) {
+							ret.branch += 2;
+						}
+					}
 				}
-				if (stmt != null && stmt.op != null) {
+				if (stmt != null && stmt.op != null && stmt.op.format != null) {
 					ret.insn++;
 					offset += stmt.op.format.size;
 				}
+			}
+			if (ret.branch == 0) {
+				ret.branch = ret.branchCover = 1;
 			}
 			ret.line = label2Integer.values().size();
 			ret.lineCover = lines.size();
@@ -216,6 +226,14 @@ public class CodeMapFile {
 		CodeMethod temp = new Gson().fromJson(str, CodeMethod.class);
 		temp.init();
 		System.out.println(temp.getMethod().toString());
+	}
+
+	public boolean hasCover(Method method) {
+		CodeMethod cm = codes.get(method);
+		if (cm == null) {
+			return false;
+		}
+		return true;
 	}
 
 	public boolean hasCover(DexMethodNode dmn) {
@@ -337,38 +355,11 @@ public class CodeMapFile {
 	}
 
 	private Map<String, CoverReport> calculateReport(DexZipReader dzp) {
-		Map<String, CoverReport> reports = new HashMap<String, CoverReport>();
-		for (DexClassNode dcn : dzp.dexCache.values()) {
-			if ((dcn.access & DexConstants.ACC_INTERFACE) != 0)
-				continue;
-			String pkg = dcn.className.replaceAll("[^//]*;", "");
-			if (!reports.containsKey(pkg))
-				reports.put(pkg, new CoverReport());
-			CoverReport report = reports.get(pkg);
-			report.clz++;
-			int clzCover = 0;
-			if (dcn.methods != null)
-				for (DexMethodNode dmn : dcn.methods) {
-					if (dmn.codeNode != null) {
-						report.method++;
-						if (hasCover(dmn)) {
-							clzCover = 1;
-							report.methodCover++;
-							InsnCover cover = codes.get(dmn.method).getInsnCover(dmn);
-							report.insn += cover.insn;
-							report.insnCover += cover.insnCover;
-							report.branch += cover.branch;
-							report.branchCover += cover.branchCover;
-							if (cover.maxLine >= 0) {
-								report.line += cover.maxLine - cover.minLine + 1;
-								report.lineCover += cover.lineCover;
-							}
-						}
-					}
-				}
-			report.clzCover += clzCover;
+		ReportCollector collector = new ReportCollector(this);
+		for (DexFileReader dfr : dzp.dexCache.values()) {
+			dfr.accept(collector);
 		}
-		return reports;
+		return collector.getReport();
 	}
 
 	public void printAll(DexZipReader dzp, SummaryCoverageBean summary) {
@@ -432,11 +423,14 @@ public class CodeMapFile {
 	}
 
 	private Map<String, Map<String, CoverReport>> calculateReportForPkg(DexZipReader dzp) {
+		ReportCollector collector = new ReportCollector(this);
+		for (DexFileReader dfr : dzp.dexCache.values()) {
+			dfr.accept(collector);
+		}
+		Map<String, CoverReport> clz2Report = collector.getReport();
 		Map<String, Map<String, CoverReport>> reports = new HashMap<String, Map<String, CoverReport>>();
-		for (DexClassNode dcn : dzp.dexCache.values()) {
-			if ((dcn.access & DexConstants.ACC_INTERFACE) != 0)
-				continue;
-			String pkg = dcn.className.replaceAll("[^//]*;", "");
+		for (String clzName : clz2Report.keySet()) {
+			String pkg = clzName.replaceAll("[^//]*;", "");
 			if (!reports.containsKey(pkg)) {
 				reports.put(pkg, new HashMap<String, CoverReport>());
 			}
@@ -445,44 +439,51 @@ public class CodeMapFile {
 				clzReports.put("summary", new CoverReport());
 			}
 			CoverReport pkgReport = clzReports.get("summary");
-			String clzName = dcn.className;
+			CoverReport clzReport = clz2Report.get(clzName);
 			if (!clzReports.containsKey(clzName)) {
-				clzReports.put(clzName, new CoverReport());
+				// clzReports.put(clzName, new CoverReport());
+				clzReports.put(clzName, clzReport);
 			}
-			CoverReport clzReport = clzReports.get(clzName);
-			pkgReport.clz++;
-			clzReport.clz++;
-			int clzCover = 0;
-			if (dcn.methods != null) {
-				for (DexMethodNode dmn : dcn.methods) {
-					if (dmn.codeNode != null) {
-						pkgReport.method++;
-						clzReport.method++;
-						if (hasCover(dmn)) {
-							clzCover = 1;
-							pkgReport.methodCover++;
-							clzReport.methodCover++;
-							InsnCover cover = codes.get(dmn.method).getInsnCover(dmn);
-							pkgReport.insn += cover.insn;
-							clzReport.insn += cover.insn;
-							pkgReport.insnCover += cover.insnCover;
-							clzReport.insnCover += cover.insnCover;
-							pkgReport.branch += cover.branch;
-							clzReport.branch += cover.branch;
-							pkgReport.branchCover += cover.branchCover;
-							clzReport.branchCover += cover.branchCover;
-							if (cover.maxLine >= 0) {
-								pkgReport.line += cover.maxLine - cover.minLine + 1;
-								clzReport.line += cover.maxLine - cover.minLine + 1;
-								pkgReport.lineCover += cover.lineCover;
-								clzReport.lineCover += cover.lineCover;
-							}
-						}
-					}
-				}
-			}
-			pkgReport.clzCover += clzCover;
-			clzReport.clzCover += clzCover;
+			pkgReport.clz += clzReport.clz;
+			pkgReport.clzCover += clzReport.clzCover;
+			pkgReport.method += clzReport.method;
+			pkgReport.methodCover += clzReport.methodCover;
+			pkgReport.branch += clzReport.branch;
+			pkgReport.branchCover += clzReport.branchCover;
+			pkgReport.line += clzReport.line;
+			pkgReport.lineCover += clzReport.lineCover;
+			pkgReport.insn += clzReport.insn;
+			pkgReport.insnCover += clzReport.insnCover;
+			// CoverReport clzReport = clzReports.get(clzName);
+			// pkgReport.clz++;
+			// clzReport.clz++;
+			// int clzCover = 0;
+			// for (Method method : collector.getMethods(clzName)) {
+			// pkgReport.method++;
+			// clzReport.method++;
+			// if (codes.containsKey(method)) {
+			// clzCover = 1;
+			// pkgReport.methodCover++;
+			// clzReport.methodCover++;
+			// InsnCover cover = collector.getInsnCover(method);
+			// pkgReport.insn += cover.insn;
+			// clzReport.insn += cover.insn;
+			// pkgReport.insnCover += cover.insnCover;
+			// clzReport.insnCover += cover.insnCover;
+			// pkgReport.branch += cover.branch;
+			// clzReport.branch += cover.branch;
+			// pkgReport.branchCover += cover.branchCover;
+			// clzReport.branchCover += cover.branchCover;
+			// if (cover.maxLine >= 0) {
+			// pkgReport.line += cover.maxLine - cover.minLine + 1;
+			// clzReport.line += cover.maxLine - cover.minLine + 1;
+			// pkgReport.lineCover += cover.lineCover;
+			// clzReport.lineCover += cover.lineCover;
+			// }
+			// }
+			// }
+			// pkgReport.clzCover += clzCover;
+			// clzReport.clzCover += clzCover;
 		}
 		return reports;
 	}
